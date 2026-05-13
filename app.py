@@ -7,7 +7,7 @@ import io
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="AI Retail Planning Assistant", page_icon="🛍️", layout="wide")
 st.title("🛍️ End-to-End Retail Planning Console")
-st.markdown("Upload raw supplier data to automatically generate the planning deliverable, then chat with the AI to analyze the results.")
+st.markdown("\n Groupwork Deployment By \n 1. Puspanjali Dahal \n 2. Harishraghavend Balaji \n 3. Dhruvi Malesha \n 4. Ming Fang \n 5. Moosa Ali \n 6. Digbijoy Mazumder \n \n Upload raw supplier data to automatically generate the planning deliverable, then chat with the AI to analyze the results.")
 
 # --- INITIALIZE SESSION STATE ---
 if "raw_file_bytes" not in st.session_state:
