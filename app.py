@@ -10,6 +10,10 @@ st.title("🛍️ End-to-End Retail Planning Console")
 st.markdown("Upload raw supplier data to automatically generate the planning deliverable, then chat with the AI to analyze the results.")
 
 # --- INITIALIZE SESSION STATE ---
+if "raw_file_bytes" not in st.session_state:
+    st.session_state.raw_file_bytes = None
+if "raw_file_name" not in st.session_state:
+    st.session_state.raw_file_name = None
 if "processed_df" not in st.session_state:
     st.session_state.processed_df = None
 if "messages" not in st.session_state:
@@ -18,14 +22,31 @@ if "messages" not in st.session_state:
 # --- SIDEBAR: SETUP ---
 with st.sidebar:
     st.header("1. Setup & Upload")
-    api_key = st.text_input("Enter your Gemini API Key:", type="password")
-    uploaded_file = st.file_uploader("Upload Raw Reference Data (.xlsx)", type=["xlsx"])
     
+    # Hide the uploader if a file has already been saved to session state
+    if st.session_state.raw_file_bytes is None:
+        uploaded_file = st.file_uploader("Upload Raw Reference Data (.xlsx)", type=["xlsx"])
+        
+        # If a file is dropped in, save it to memory and refresh the page instantly
+        if uploaded_file is not None:
+            st.session_state.raw_file_bytes = uploaded_file.getvalue()
+            st.session_state.raw_file_name = uploaded_file.name
+            st.rerun()
+    else:
+        st.success(f"✅ File uploaded: {st.session_state.raw_file_name}")
+        st.caption("Further uploads disabled to protect current session.")
+        
+        # Provide a way to reset the app if they uploaded the wrong file
+        if st.button("Start Over (Reset App)", type="primary"):
+            st.session_state.clear()
+            st.rerun()
+            
+    st.divider()
     if st.button("Clear Chat History"):
         st.session_state.messages = []
 
 # --- SECTION 1: DATA PROCESSING ---
-if uploaded_file:
+if st.session_state.raw_file_bytes is not None:
     st.header("⚙️ Step 1: Data Processing Pipeline")
     
     # We use a button to trigger processing so it doesn't run repeatedly on every interaction
@@ -35,8 +56,8 @@ if uploaded_file:
         if st.session_state.processed_df is None:
             with st.spinner("Cleaning data, merging tabs, and calculating forecasts..."):
                 try:
-                    # 1. LOAD THE DATA
-                    df_file = pd.ExcelFile(uploaded_file)
+                    # 1. LOAD THE DATA (Read from the bytes stored in Session State)
+                    df_file = pd.ExcelFile(io.BytesIO(st.session_state.raw_file_bytes))
                     tab1 = pd.read_excel(df_file, "TAB 1", header=1)
                     tab2 = pd.read_excel(df_file, "Tab 2", header=2)
                     tab3 = pd.read_excel(df_file, "Tab 3", header=3)
@@ -118,14 +139,16 @@ st.divider()
 if st.session_state.processed_df is not None:
     st.header("🤖 Step 2: AI Planning Insights")
     
+    # Ask for the API key here, locally to this section
+    api_key = st.text_input("🔑 Enter your Gemini API Key to unlock the Chatbot:", type="password")
+    
     if not api_key:
-        st.warning("Please enter your Gemini API Key in the sidebar to unlock the chatbot.")
+        st.info("Please enter your API key above to start analyzing your generated report.")
     else:
         # Initialize client
         client = genai.Client(api_key=api_key)
         
         # Prepare the context string from the processed data
-        # Using to_csv instead of markdown saves tokens for the Lite model
         data_string = st.session_state.processed_df.to_csv(index=False)
         
         system_instructions = f"""
@@ -167,5 +190,5 @@ if st.session_state.processed_df is not None:
                     
                 except Exception as e:
                     st.error(f"An error occurred with the AI: {e}")
-elif not uploaded_file:
+elif st.session_state.raw_file_bytes is None:
     st.info("👈 Please upload the raw reference data in the sidebar to begin.")
