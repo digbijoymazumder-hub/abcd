@@ -58,12 +58,12 @@ if st.session_state.raw_file_bytes is not None:
                     tab3 = pd.read_excel(df_file, "Tab 3", header=3)
                     tab4 = pd.read_excel(df_file, "Tab 4", header=3)
 
-                    # 2. CLEAN & PREP (CRITICAL: Remove all garbage blank rows first)
+                    # 2. CLEAN & PREP
                     tab1 = tab1.dropna(subset=['Brand'])
                     tab1 = tab1[~tab1['Brand'].astype(str).str.contains("Total", case=False, na=False)]
                     tab2 = tab2[~tab2['Brand'].astype(str).str.contains("Total", case=False, na=False)]
 
-                    # Forward fill the Axe category to all valid brands
+                    # Forward fill the Axe category
                     tab1['Axe'] = tab1['Axe'].ffill()
 
                     tab1['Brand_Clean'] = tab1['Brand'].astype(str).str.title().str.strip()
@@ -99,11 +99,8 @@ if st.session_state.raw_file_bytes is not None:
                     df['Comments'] = ""
 
                     # 5. DYNAMIC EXCEL FORMULA INJECTION
-                    # Grab unique axes dynamically so we don't skip anything due to spelling differences
                     axes = df['Axe'].dropna().unique()
                     ordered_dfs = [] 
-                    
-                    # Excel rows: 1=Title, 2=Headers, 3=First Data Row
                     current_row = 3  
                     subtotal_rows = []
 
@@ -116,10 +113,8 @@ if st.session_state.raw_file_bytes is not None:
                         end_row = current_row + num_brands - 1
                         total_row_idx = end_row + 1
                         
-                        # Wipe axis name for all but the first row of the block to match reference
                         axe_df.loc[axe_df.index[1:], 'Axe'] = ''
                         
-                        # Build Native Excel formulas for the subtotal
                         sum_series = {
                             'Axe': f'{axe} Total',
                             'Brand': '',
@@ -144,7 +139,7 @@ if st.session_state.raw_file_bytes is not None:
                         subtotal_rows.append(total_row_idx)
                         current_row = total_row_idx + 1
 
-                    # Calculate Grand Total with dynamic formula linking
+                    # Calculate Grand Total
                     grand_total = {
                         'Axe': 'Grand Total',
                         'Brand': '',
@@ -164,7 +159,6 @@ if st.session_state.raw_file_bytes is not None:
                     }
                     ordered_dfs.append(pd.DataFrame([grand_total]))
 
-                    # Stitch all blocks together
                     df_with_totals = pd.concat(ordered_dfs, ignore_index=True)
 
                     # 6. EXACT REFERENCE FILE RENAMING
@@ -213,7 +207,6 @@ if st.session_state.raw_file_bytes is not None:
 
         # --- EXCEL FORMATTING (XLSXWRITER) ---
         if st.session_state.processed_df is not None:
-            # We display the dataframe in Streamlit (it will show the raw formula strings)
             st.dataframe(st.session_state.processed_df)
             
             output = io.BytesIO()
@@ -222,13 +215,17 @@ if st.session_state.raw_file_bytes is not None:
                 workbook = writer.book
                 worksheet = writer.sheets['Set Sales 2023']
                 
-                # Formats
+                # --- FORMAT DEFINITIONS ---
                 title_format = workbook.add_format({'bold': True, 'font_size': 12})
                 money_format = workbook.add_format({'num_format': '$#,##0.0', 'border': 1})
                 percent_format = workbook.add_format({'num_format': '0.0%', 'border': 1})
                 general_border = workbook.add_format({'border': 1})
                 header_format = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
-                red_font = workbook.add_format({'font_color': 'red', 'num_format': '$#,##0.0', 'border': 1})
+                
+                # Dynamic Row & Risk Formats
+                red_font = workbook.add_format({'font_color': 'red', 'num_format': '$#,##0.0'})
+                subtotal_format = workbook.add_format({'bg_color': '#EAEAEA', 'bold': True})     # Light Grey for Category Totals
+                grand_total_format = workbook.add_format({'bg_color': '#D9D9D9', 'bold': True})  # Darker Grey for Grand Total
 
                 worksheet.write('A1', 'Beutist SET SELLING 2023', title_format)
 
@@ -246,7 +243,26 @@ if st.session_state.raw_file_bytes is not None:
                     else:
                         worksheet.set_column(i, i, 15, general_border)
 
-                worksheet.conditional_format(2, 12, len(st.session_state.processed_df) + 1, 12, {
+                # --- CONDITIONAL FORMATTING RULES ---
+                max_row = len(st.session_state.processed_df) + 1
+                max_col = len(st.session_state.processed_df.columns) - 1
+
+                # 1. Color Subtotal Rows (Matches any row where Axis ends in "Total", but is not "Grand Total")
+                worksheet.conditional_format(2, 0, max_row, max_col, {
+                    'type': 'formula',
+                    'criteria': '=AND(RIGHT($A3,5)="Total", $A3<>"Grand Total")',
+                    'format': subtotal_format
+                })
+                
+                # 2. Color Grand Total Row
+                worksheet.conditional_format(2, 0, max_row, max_col, {
+                    'type': 'formula',
+                    'criteria': '=$A3="Grand Total"',
+                    'format': grand_total_format
+                })
+
+                # 3. Highlight Negative Dollar Difference in Red (Index 12)
+                worksheet.conditional_format(2, 12, max_row, 12, {
                     'type': 'cell',
                     'criteria': '<',
                     'value': 0,
