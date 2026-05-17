@@ -103,9 +103,10 @@ if st.session_state.raw_file_bytes is not None:
                         axe_df = df[df['Axe'] == axe]
                         if axe_df.empty: continue
                         
+                        # Match reference formatting: Axis = "NAME Total", Brand = ""
                         sum_series = {
-                            'Axe': axe,
-                            'Brand': f'{axe} Total',
+                            'Axe': f'{axe} Total',
+                            'Brand': '',
                             'YTD SET SALES\n(through to 9/22/2023)': axe_df['YTD SET SALES\n(through to 9/22/2023)'].sum(),
                             'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': axe_df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'].sum(),
                             'Q3 2022\nSET SALES': axe_df['Q3 2022\nSET SALES'].sum(),
@@ -129,8 +130,8 @@ if st.session_state.raw_file_bytes is not None:
 
                     # Calculate Grand Total
                     grand_total = {
-                        'Axe': 'ALL',
-                        'Brand': 'GRAND TOTAL',
+                        'Axe': 'Grand Total',
+                        'Brand': '',
                         'YTD SET SALES\n(through to 9/22/2023)': df['YTD SET SALES\n(through to 9/22/2023)'].sum(),
                         'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'].sum(),
                         'Q3 2022\nSET SALES': df['Q3 2022\nSET SALES'].sum(),
@@ -152,25 +153,45 @@ if st.session_state.raw_file_bytes is not None:
 
                     df_with_totals = pd.concat([df, pd.DataFrame(axis_rows), pd.DataFrame([grand_total])], ignore_index=True)
 
-                    # 6. FINAL COLUMN SELECTION
-                    final_columns = [
-                        'Axe', 'Brand', 
+                    # 6. EXACT REFERENCE FILE RENAMING & REORDERING
+                    rename_cols = {
+                        'Axe': 'Axis',
+                        'Brand': 'Brand',
+                        'YTD SET SALES\n(through to 9/22/2023)': 'YTD SET SALES\n(through to 9/22/2023)',
+                        'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': 'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)',
+                        '% Change in YTD Sales': '% CHANGE IN YTD SET SALES',
+                        'Q1 2023 \nSET SALES': 'Q1 2023 \nSET SALES',
+                        'Q4 2022\nSET SALES': 'Q4 2022\nSET SALES',
+                        'Q3 2022\nSET SALES': 'Q3 2022\nSET SALES',
+                        'Total Expected Sales': "TOTAL EXPECTED SALES \n(through to end of Q1'2023)",
+                        'Sum of OH+OO': "OH + OO ($)\n(as of 9/22/2023)",
+                        '$ SHIPMENTS 10/23/23': "EXPECTED SHIPMENTS\n(Oct. 2023)",
+                        'Total Shipment $ Q1 2024 sets': "EXPECTED SHIPMENTS\n (Q1 2023)",
+                        'Dollar Difference': "TOTAL OH + OO ($) vs. TOTAL EXPECTED SALES",
+                        'Inventory as % of Expected Sales': "TOTAL OH + OO ($)\n as % of TOTAL EXPECTED SALES",
+                        'Comments': "COMMENTS"
+                    }
+                    
+                    df_with_totals = df_with_totals.rename(columns=rename_cols)
+                    
+                    final_ordered_columns = [
+                        'Axis', 'Brand', 
                         'YTD SET SALES\n(through to 9/22/2023)', 
                         'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)',
-                        '% Change in YTD Sales', 
-                        'Q3 2022\nSET SALES', 
-                        'Q4 2022\nSET SALES', 
+                        '% CHANGE IN YTD SET SALES', 
                         'Q1 2023 \nSET SALES', 
-                        'Total Expected Sales', 
-                        'Sum of OH+OO', 
-                        '$ SHIPMENTS 10/23/23', 
-                        'Total Shipment $ Q1 2024 sets',
-                        'Dollar Difference', 
-                        'Inventory as % of Expected Sales', 
-                        'Comments'
+                        'Q4 2022\nSET SALES', 
+                        'Q3 2022\nSET SALES', 
+                        "TOTAL EXPECTED SALES \n(through to end of Q1'2023)", 
+                        "OH + OO ($)\n(as of 9/22/2023)", 
+                        "EXPECTED SHIPMENTS\n(Oct. 2023)", 
+                        "EXPECTED SHIPMENTS\n (Q1 2023)",
+                        "TOTAL OH + OO ($) vs. TOTAL EXPECTED SALES", 
+                        "TOTAL OH + OO ($)\n as % of TOTAL EXPECTED SALES", 
+                        "COMMENTS"
                     ]
                     
-                    st.session_state.processed_df = df_with_totals[final_columns]
+                    st.session_state.processed_df = df_with_totals[final_ordered_columns]
                     st.success("Pipeline complete! Data is ready.")
                     
                 except Exception as e:
@@ -182,35 +203,40 @@ if st.session_state.raw_file_bytes is not None:
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                st.session_state.processed_df.to_excel(writer, sheet_name='Set Sales 2023', index=False)
+                # Write dataframe starting at row 1 (leaves row 0 for the main title)
+                st.session_state.processed_df.to_excel(writer, sheet_name='Set Sales 2023', index=False, startrow=1)
                 workbook = writer.book
                 worksheet = writer.sheets['Set Sales 2023']
                 
                 # Formats
+                title_format = workbook.add_format({'bold': True, 'font_size': 12})
                 money_format = workbook.add_format({'num_format': '$#,##0.0', 'border': 1})
                 percent_format = workbook.add_format({'num_format': '0.0%', 'border': 1})
                 general_border = workbook.add_format({'border': 1})
                 header_format = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
                 red_font = workbook.add_format({'font_color': 'red', 'num_format': '$#,##0.0', 'border': 1})
 
-                # Apply headers and borders
+                # Write the Client Title in A1
+                worksheet.write('A1', 'Beutist SET SELLING 2023', title_format)
+
+                # Apply headers format (row 1)
                 for col_num, value in enumerate(st.session_state.processed_df.columns):
-                    worksheet.write(0, col_num, value, header_format)
+                    worksheet.write(1, col_num, value, header_format)
                     
-                # Format specific columns
-                money_cols = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12] # Indices for sales/inventory columns
-                percent_cols = [4, 13] # Indices for % columns
+                # Format specific columns (adjusted for the new ordering)
+                money_cols = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12] # Indices for sales/inventory
+                percent_cols = [4, 13] # Indices for % changes
                 
                 for i in range(len(st.session_state.processed_df.columns)):
                     if i in money_cols:
-                        worksheet.set_column(i, i, 15, money_format)
+                        worksheet.set_column(i, i, 16, money_format)
                     elif i in percent_cols:
-                        worksheet.set_column(i, i, 12, percent_format)
+                        worksheet.set_column(i, i, 14, percent_format)
                     else:
                         worksheet.set_column(i, i, 15, general_border)
 
-                # Conditional Formatting for Negative Dollar Difference (Index 12)
-                worksheet.conditional_format(1, 12, len(st.session_state.processed_df), 12, {
+                # Conditional Formatting for Negative Difference (Index 12)
+                worksheet.conditional_format(2, 12, len(st.session_state.processed_df) + 1, 12, {
                     'type': 'cell',
                     'criteria': '<',
                     'value': 0,
@@ -239,7 +265,6 @@ if st.session_state.processed_df is not None:
     else:
         client = genai.Client(api_key=api_key)
         
-        # Convert to CSV for token efficiency
         data_string = st.session_state.processed_df.to_csv(index=False)
         
         system_instructions = f"""
@@ -250,8 +275,8 @@ if st.session_state.processed_df is not None:
         
         {data_string}
         
-        Answer the user's questions based strictly on this data. Look at Dollar Difference and 
-        Inventory as % of Expected Sales to find risks. Be concise, professional, and strategic.
+        Answer the user's questions based strictly on this data. Look at "TOTAL OH + OO ($) vs. TOTAL EXPECTED SALES" and 
+        "TOTAL OH + OO ($) as % of TOTAL EXPECTED SALES" to find risks. Be concise, professional, and strategic.
         """
 
         for message in st.session_state.messages:
