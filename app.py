@@ -59,8 +59,12 @@ if st.session_state.raw_file_bytes is not None:
                     tab4 = pd.read_excel(df_file, "Tab 4", header=3)
 
                     # 2. CLEAN & PREP
+                    # Drop the old hardcoded total rows first
                     tab1 = tab1[~tab1['Brand'].astype(str).str.contains("Total", na=False)]
                     tab2 = tab2[~tab2['Brand'].astype(str).str.contains("Total", na=False)]
+
+                    # CRITICAL FIX: Forward-fill the 'Axe' column so pandas knows which category EVERY brand belongs to
+                    tab1['Axe'] = tab1['Axe'].ffill()
 
                     tab1['Brand_Clean'] = tab1['Brand'].astype(str).str.title().str.strip()
                     tab2['Brand_Clean'] = tab2['Brand'].astype(str).str.title().str.strip()
@@ -96,16 +100,14 @@ if st.session_state.raw_file_bytes is not None:
 
                     # 5. ORDERED SUBTOTALS AND GRAND TOTAL LOGIC
                     axes = ['SKIN CARE', 'MAKEUP', 'FRAGRANCE']
-                    ordered_dfs = [] # We will build the table block by block here
+                    ordered_dfs = [] 
 
                     for axe in axes:
-                        axe_df = df[df['Axe'] == axe]
+                        # Grab ALL rows for this category now that ffill() has properly labeled them
+                        axe_df = df[df['Axe'] == axe].copy()
                         if axe_df.empty: continue
                         
-                        # A. Add the individual brands for this Axis first
-                        ordered_dfs.append(axe_df)
-                        
-                        # B. Calculate the Subtotal for this Axis
+                        # Calculate the Subtotal for this Axis BEFORE we wipe the names
                         sum_series = {
                             'Axe': f'{axe} Total',
                             'Brand': '',
@@ -128,7 +130,11 @@ if st.session_state.raw_file_bytes is not None:
                         sum_series['Inventory as % of Expected Sales'] = (sum_series['Sum of OH+OO'] + sum_series['$ SHIPMENTS 10/23/23'] + sum_series['Total Shipment $ Q1 2024 sets']) / expected_sales if expected_sales != 0 else np.nan
                         sum_series['Comments'] = ''
                         
-                        # C. Add the Subtotal row immediately after its brands
+                        # VISUAL FIX: Blank out the repeated category names on all rows except the first to match the exact client layout
+                        axe_df.loc[axe_df.index[1:], 'Axe'] = ''
+
+                        # Append the brands, then immediately append their subtotal
+                        ordered_dfs.append(axe_df)
                         ordered_dfs.append(pd.DataFrame([sum_series]))
 
                     # Calculate Grand Total using the original full df
@@ -154,10 +160,9 @@ if st.session_state.raw_file_bytes is not None:
                     grand_total['Inventory as % of Expected Sales'] = (grand_total['Sum of OH+OO'] + grand_total['$ SHIPMENTS 10/23/23'] + grand_total['Total Shipment $ Q1 2024 sets']) / gt_expected if gt_expected != 0 else np.nan
                     grand_total['Comments'] = ''
 
-                    # D. Add Grand Total at the very end
                     ordered_dfs.append(pd.DataFrame([grand_total]))
 
-                    # Stitch all blocks together exactly in the order we appended them
+                    # Stitch all blocks together
                     df_with_totals = pd.concat(ordered_dfs, ignore_index=True)
 
                     # 6. EXACT REFERENCE FILE RENAMING
@@ -210,7 +215,6 @@ if st.session_state.raw_file_bytes is not None:
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # Write dataframe starting at row 1 (leaves row 0 for the main title)
                 st.session_state.processed_df.to_excel(writer, sheet_name='Set Sales 2023', index=False, startrow=1)
                 workbook = writer.book
                 worksheet = writer.sheets['Set Sales 2023']
@@ -223,14 +227,11 @@ if st.session_state.raw_file_bytes is not None:
                 header_format = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
                 red_font = workbook.add_format({'font_color': 'red', 'num_format': '$#,##0.0', 'border': 1})
 
-                # Write the Client Title in A1
                 worksheet.write('A1', 'Beutist SET SELLING 2023', title_format)
 
-                # Apply headers format (row 1)
                 for col_num, value in enumerate(st.session_state.processed_df.columns):
                     worksheet.write(1, col_num, value, header_format)
                     
-                # Format specific columns 
                 money_cols = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12] 
                 percent_cols = [4, 13] 
                 
@@ -242,7 +243,6 @@ if st.session_state.raw_file_bytes is not None:
                     else:
                         worksheet.set_column(i, i, 15, general_border)
 
-                # Conditional Formatting for Negative Difference (Index 12)
                 worksheet.conditional_format(2, 12, len(st.session_state.processed_df) + 1, 12, {
                     'type': 'cell',
                     'criteria': '<',
