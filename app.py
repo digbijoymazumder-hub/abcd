@@ -49,7 +49,7 @@ if st.session_state.raw_file_bytes is not None:
     if st.button("Process Raw Data into Deliverable") or st.session_state.processed_df is not None:
         
         if st.session_state.processed_df is None:
-            with st.spinner("Cleaning data, calculating forecasts, and formatting report..."):
+            with st.spinner("Cleaning data, calculating forecasts, and formatting Excel formulas..."):
                 try:
                     # 1. LOAD THE DATA
                     df_file = pd.ExcelFile(io.BytesIO(st.session_state.raw_file_bytes))
@@ -58,12 +58,12 @@ if st.session_state.raw_file_bytes is not None:
                     tab3 = pd.read_excel(df_file, "Tab 3", header=3)
                     tab4 = pd.read_excel(df_file, "Tab 4", header=3)
 
-                    # 2. CLEAN & PREP
-                    # Drop the old hardcoded total rows first
-                    tab1 = tab1[~tab1['Brand'].astype(str).str.contains("Total", na=False)]
-                    tab2 = tab2[~tab2['Brand'].astype(str).str.contains("Total", na=False)]
+                    # 2. CLEAN & PREP (CRITICAL: Remove all garbage blank rows first)
+                    tab1 = tab1.dropna(subset=['Brand'])
+                    tab1 = tab1[~tab1['Brand'].astype(str).str.contains("Total", case=False, na=False)]
+                    tab2 = tab2[~tab2['Brand'].astype(str).str.contains("Total", case=False, na=False)]
 
-                    # CRITICAL FIX: Forward-fill the 'Axe' column so pandas knows which category EVERY brand belongs to
+                    # Forward fill the Axe category to all valid brands
                     tab1['Axe'] = tab1['Axe'].ffill()
 
                     tab1['Brand_Clean'] = tab1['Brand'].astype(str).str.title().str.strip()
@@ -81,7 +81,7 @@ if st.session_state.raw_file_bytes is not None:
                     numeric_cols = df.select_dtypes(include=[np.number]).columns
                     df[numeric_cols] = df[numeric_cols].fillna(0)
 
-                    # 4. CALCULATIONS
+                    # 4. BRAND LEVEL CALCULATIONS
                     df['% Change in YTD Sales'] = np.where(
                         df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'] != 0,
                         (df['YTD SET SALES\n(through to 9/22/2023)'] - df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']) / df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'],
@@ -98,68 +98,70 @@ if st.session_state.raw_file_bytes is not None:
                     )
                     df['Comments'] = ""
 
-                    # 5. ORDERED SUBTOTALS AND GRAND TOTAL LOGIC
-                    axes = ['SKIN CARE', 'MAKEUP', 'FRAGRANCE']
+                    # 5. DYNAMIC EXCEL FORMULA INJECTION
+                    # Grab unique axes dynamically so we don't skip anything due to spelling differences
+                    axes = df['Axe'].dropna().unique()
                     ordered_dfs = [] 
+                    
+                    # Excel rows: 1=Title, 2=Headers, 3=First Data Row
+                    current_row = 3  
+                    subtotal_rows = []
 
                     for axe in axes:
-                        # Grab ALL rows for this category now that ffill() has properly labeled them
                         axe_df = df[df['Axe'] == axe].copy()
                         if axe_df.empty: continue
                         
-                        # Calculate the Subtotal for this Axis BEFORE we wipe the names
+                        num_brands = len(axe_df)
+                        start_row = current_row
+                        end_row = current_row + num_brands - 1
+                        total_row_idx = end_row + 1
+                        
+                        # Wipe axis name for all but the first row of the block to match reference
+                        axe_df.loc[axe_df.index[1:], 'Axe'] = ''
+                        
+                        # Build Native Excel formulas for the subtotal
                         sum_series = {
                             'Axe': f'{axe} Total',
                             'Brand': '',
-                            'YTD SET SALES\n(through to 9/22/2023)': axe_df['YTD SET SALES\n(through to 9/22/2023)'].sum(),
-                            'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': axe_df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'].sum(),
-                            'Q3 2022\nSET SALES': axe_df['Q3 2022\nSET SALES'].sum(),
-                            'Q4 2022\nSET SALES': axe_df['Q4 2022\nSET SALES'].sum(),
-                            'Q1 2023 \nSET SALES': axe_df['Q1 2023 \nSET SALES'].sum(),
-                            'Sum of OH+OO': axe_df['Sum of OH+OO'].sum(),
-                            '$ SHIPMENTS 10/23/23': axe_df['$ SHIPMENTS 10/23/23'].sum(),
-                            'Total Shipment $ Q1 2024 sets': axe_df['Total Shipment $ Q1 2024 sets'].sum(),
+                            'YTD SET SALES\n(through to 9/22/2023)': f'=SUM(C{start_row}:C{end_row})',
+                            'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': f'=SUM(D{start_row}:D{end_row})',
+                            '% Change in YTD Sales': f'=IF(D{total_row_idx}=0, "", (C{total_row_idx}-D{total_row_idx})/D{total_row_idx})',
+                            'Q1 2023 \nSET SALES': f'=SUM(F{start_row}:F{end_row})',
+                            'Q4 2022\nSET SALES': f'=SUM(G{start_row}:G{end_row})',
+                            'Q3 2022\nSET SALES': f'=SUM(H{start_row}:H{end_row})',
+                            'Total Expected Sales': f'=SUM(I{start_row}:I{end_row})',
+                            'Sum of OH+OO': f'=SUM(J{start_row}:J{end_row})',
+                            '$ SHIPMENTS 10/23/23': f'=SUM(K{start_row}:K{end_row})',
+                            'Total Shipment $ Q1 2024 sets': f'=SUM(L{start_row}:L{end_row})',
+                            'Dollar Difference': f'=J{total_row_idx}+K{total_row_idx}+L{total_row_idx}-I{total_row_idx}',
+                            'Inventory as % of Expected Sales': f'=IF(I{total_row_idx}=0, "", (J{total_row_idx}+K{total_row_idx}+L{total_row_idx})/I{total_row_idx})',
+                            'Comments': ''
                         }
                         
-                        prior_ytd = sum_series['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']
-                        sum_series['% Change in YTD Sales'] = (sum_series['YTD SET SALES\n(through to 9/22/2023)'] - prior_ytd) / prior_ytd if prior_ytd != 0 else np.nan
-                        sum_series['Total Expected Sales'] = sum_series['Q3 2022\nSET SALES'] + sum_series['Q4 2022\nSET SALES'] + sum_series['Q1 2023 \nSET SALES']
-                        sum_series['Dollar Difference'] = (sum_series['Sum of OH+OO'] + sum_series['$ SHIPMENTS 10/23/23'] + sum_series['Total Shipment $ Q1 2024 sets']) - sum_series['Total Expected Sales']
-                        
-                        expected_sales = sum_series['Total Expected Sales']
-                        sum_series['Inventory as % of Expected Sales'] = (sum_series['Sum of OH+OO'] + sum_series['$ SHIPMENTS 10/23/23'] + sum_series['Total Shipment $ Q1 2024 sets']) / expected_sales if expected_sales != 0 else np.nan
-                        sum_series['Comments'] = ''
-                        
-                        # VISUAL FIX: Blank out the repeated category names on all rows except the first to match the exact client layout
-                        axe_df.loc[axe_df.index[1:], 'Axe'] = ''
-
-                        # Append the brands, then immediately append their subtotal
                         ordered_dfs.append(axe_df)
                         ordered_dfs.append(pd.DataFrame([sum_series]))
+                        
+                        subtotal_rows.append(total_row_idx)
+                        current_row = total_row_idx + 1
 
-                    # Calculate Grand Total using the original full df
+                    # Calculate Grand Total with dynamic formula linking
                     grand_total = {
                         'Axe': 'Grand Total',
                         'Brand': '',
-                        'YTD SET SALES\n(through to 9/22/2023)': df['YTD SET SALES\n(through to 9/22/2023)'].sum(),
-                        'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'].sum(),
-                        'Q3 2022\nSET SALES': df['Q3 2022\nSET SALES'].sum(),
-                        'Q4 2022\nSET SALES': df['Q4 2022\nSET SALES'].sum(),
-                        'Q1 2023 \nSET SALES': df['Q1 2023 \nSET SALES'].sum(),
-                        'Sum of OH+OO': df['Sum of OH+OO'].sum(),
-                        '$ SHIPMENTS 10/23/23': df['$ SHIPMENTS 10/23/23'].sum(),
-                        'Total Shipment $ Q1 2024 sets': df['Total Shipment $ Q1 2024 sets'].sum(),
+                        'YTD SET SALES\n(through to 9/22/2023)': f'={"+".join([f"C{r}" for r in subtotal_rows])}',
+                        'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': f'={"+".join([f"D{r}" for r in subtotal_rows])}',
+                        '% Change in YTD Sales': f'=IF(D{current_row}=0, "", (C{current_row}-D{current_row})/D{current_row})',
+                        'Q1 2023 \nSET SALES': f'={"+".join([f"F{r}" for r in subtotal_rows])}',
+                        'Q4 2022\nSET SALES': f'={"+".join([f"G{r}" for r in subtotal_rows])}',
+                        'Q3 2022\nSET SALES': f'={"+".join([f"H{r}" for r in subtotal_rows])}',
+                        'Total Expected Sales': f'={"+".join([f"I{r}" for r in subtotal_rows])}',
+                        'Sum of OH+OO': f'={"+".join([f"J{r}" for r in subtotal_rows])}',
+                        '$ SHIPMENTS 10/23/23': f'={"+".join([f"K{r}" for r in subtotal_rows])}',
+                        'Total Shipment $ Q1 2024 sets': f'={"+".join([f"L{r}" for r in subtotal_rows])}',
+                        'Dollar Difference': f'=J{current_row}+K{current_row}+L{current_row}-I{current_row}',
+                        'Inventory as % of Expected Sales': f'=IF(I{current_row}=0, "", (J{current_row}+K{current_row}+L{current_row})/I{current_row})',
+                        'Comments': ''
                     }
-                    
-                    gt_prior = grand_total['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']
-                    grand_total['% Change in YTD Sales'] = (grand_total['YTD SET SALES\n(through to 9/22/2023)'] - gt_prior) / gt_prior if gt_prior != 0 else np.nan
-                    grand_total['Total Expected Sales'] = grand_total['Q3 2022\nSET SALES'] + grand_total['Q4 2022\nSET SALES'] + grand_total['Q1 2023 \nSET SALES']
-                    grand_total['Dollar Difference'] = (grand_total['Sum of OH+OO'] + grand_total['$ SHIPMENTS 10/23/23'] + grand_total['Total Shipment $ Q1 2024 sets']) - grand_total['Total Expected Sales']
-                    
-                    gt_expected = grand_total['Total Expected Sales']
-                    grand_total['Inventory as % of Expected Sales'] = (grand_total['Sum of OH+OO'] + grand_total['$ SHIPMENTS 10/23/23'] + grand_total['Total Shipment $ Q1 2024 sets']) / gt_expected if gt_expected != 0 else np.nan
-                    grand_total['Comments'] = ''
-
                     ordered_dfs.append(pd.DataFrame([grand_total]))
 
                     # Stitch all blocks together
@@ -211,6 +213,7 @@ if st.session_state.raw_file_bytes is not None:
 
         # --- EXCEL FORMATTING (XLSXWRITER) ---
         if st.session_state.processed_df is not None:
+            # We display the dataframe in Streamlit (it will show the raw formula strings)
             st.dataframe(st.session_state.processed_df)
             
             output = io.BytesIO()
