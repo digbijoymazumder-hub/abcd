@@ -23,7 +23,6 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("1. Setup & Upload")
     
-    # Hide the uploader if a file has already been saved to session state
     if st.session_state.raw_file_bytes is None:
         uploaded_file = st.file_uploader("Upload Raw Reference Data (.xlsx)", type=["xlsx"])
         
@@ -78,7 +77,7 @@ if st.session_state.raw_file_bytes is not None:
                     numeric_cols = df.select_dtypes(include=[np.number]).columns
                     df[numeric_cols] = df[numeric_cols].fillna(0)
 
-                    # 4. CALCULATIONS (WITH SAFE DIVISION)
+                    # 4. CALCULATIONS
                     df['% Change in YTD Sales'] = np.where(
                         df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'] != 0,
                         (df['YTD SET SALES\n(through to 9/22/2023)'] - df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']) / df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'],
@@ -95,15 +94,18 @@ if st.session_state.raw_file_bytes is not None:
                     )
                     df['Comments'] = ""
 
-                    # 5. SUBTOTALS AND GRAND TOTAL LOGIC
+                    # 5. ORDERED SUBTOTALS AND GRAND TOTAL LOGIC
                     axes = ['SKIN CARE', 'MAKEUP', 'FRAGRANCE']
-                    axis_rows = []
+                    ordered_dfs = [] # We will build the table block by block here
 
                     for axe in axes:
                         axe_df = df[df['Axe'] == axe]
                         if axe_df.empty: continue
                         
-                        # Match reference formatting: Axis = "NAME Total", Brand = ""
+                        # A. Add the individual brands for this Axis first
+                        ordered_dfs.append(axe_df)
+                        
+                        # B. Calculate the Subtotal for this Axis
                         sum_series = {
                             'Axe': f'{axe} Total',
                             'Brand': '',
@@ -126,9 +128,10 @@ if st.session_state.raw_file_bytes is not None:
                         sum_series['Inventory as % of Expected Sales'] = (sum_series['Sum of OH+OO'] + sum_series['$ SHIPMENTS 10/23/23'] + sum_series['Total Shipment $ Q1 2024 sets']) / expected_sales if expected_sales != 0 else np.nan
                         sum_series['Comments'] = ''
                         
-                        axis_rows.append(pd.Series(sum_series))
+                        # C. Add the Subtotal row immediately after its brands
+                        ordered_dfs.append(pd.DataFrame([sum_series]))
 
-                    # Calculate Grand Total
+                    # Calculate Grand Total using the original full df
                     grand_total = {
                         'Axe': 'Grand Total',
                         'Brand': '',
@@ -151,9 +154,13 @@ if st.session_state.raw_file_bytes is not None:
                     grand_total['Inventory as % of Expected Sales'] = (grand_total['Sum of OH+OO'] + grand_total['$ SHIPMENTS 10/23/23'] + grand_total['Total Shipment $ Q1 2024 sets']) / gt_expected if gt_expected != 0 else np.nan
                     grand_total['Comments'] = ''
 
-                    df_with_totals = pd.concat([df, pd.DataFrame(axis_rows), pd.DataFrame([grand_total])], ignore_index=True)
+                    # D. Add Grand Total at the very end
+                    ordered_dfs.append(pd.DataFrame([grand_total]))
 
-                    # 6. EXACT REFERENCE FILE RENAMING & REORDERING
+                    # Stitch all blocks together exactly in the order we appended them
+                    df_with_totals = pd.concat(ordered_dfs, ignore_index=True)
+
+                    # 6. EXACT REFERENCE FILE RENAMING
                     rename_cols = {
                         'Axe': 'Axis',
                         'Brand': 'Brand',
@@ -199,7 +206,7 @@ if st.session_state.raw_file_bytes is not None:
 
         # --- EXCEL FORMATTING (XLSXWRITER) ---
         if st.session_state.processed_df is not None:
-            st.dataframe(st.session_state.processed_df.head(5))
+            st.dataframe(st.session_state.processed_df)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -223,9 +230,9 @@ if st.session_state.raw_file_bytes is not None:
                 for col_num, value in enumerate(st.session_state.processed_df.columns):
                     worksheet.write(1, col_num, value, header_format)
                     
-                # Format specific columns (adjusted for the new ordering)
-                money_cols = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12] # Indices for sales/inventory
-                percent_cols = [4, 13] # Indices for % changes
+                # Format specific columns 
+                money_cols = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12] 
+                percent_cols = [4, 13] 
                 
                 for i in range(len(st.session_state.processed_df.columns)):
                     if i in money_cols:
