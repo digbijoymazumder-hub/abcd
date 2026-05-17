@@ -27,7 +27,6 @@ with st.sidebar:
     if st.session_state.raw_file_bytes is None:
         uploaded_file = st.file_uploader("Upload Raw Reference Data (.xlsx)", type=["xlsx"])
         
-        # If a file is dropped in, save it to memory and refresh the page instantly
         if uploaded_file is not None:
             st.session_state.raw_file_bytes = uploaded_file.getvalue()
             st.session_state.raw_file_name = uploaded_file.name
@@ -36,7 +35,6 @@ with st.sidebar:
         st.success(f"✅ File uploaded: {st.session_state.raw_file_name}")
         st.caption("Further uploads disabled to protect current session.")
         
-        # Provide a way to reset the app if they uploaded the wrong file
         if st.button("Start Over (Reset App)", type="primary"):
             st.session_state.clear()
             st.rerun()
@@ -49,14 +47,12 @@ with st.sidebar:
 if st.session_state.raw_file_bytes is not None:
     st.header("⚙️ Step 1: Data Processing Pipeline")
     
-    # We use a button to trigger processing so it doesn't run repeatedly on every interaction
     if st.button("Process Raw Data into Deliverable") or st.session_state.processed_df is not None:
         
-        # Only run the heavy pandas math if we haven't already processed it
         if st.session_state.processed_df is None:
-            with st.spinner("Cleaning data, merging tabs, and calculating forecasts..."):
+            with st.spinner("Cleaning data, calculating forecasts, and formatting report..."):
                 try:
-                    # 1. LOAD THE DATA (Read from the bytes stored in Session State)
+                    # 1. LOAD THE DATA
                     df_file = pd.ExcelFile(io.BytesIO(st.session_state.raw_file_bytes))
                     tab1 = pd.read_excel(df_file, "TAB 1", header=1)
                     tab2 = pd.read_excel(df_file, "Tab 2", header=2)
@@ -79,19 +75,84 @@ if st.session_state.raw_file_bytes is not None:
                     df = df.merge(tab3_grouped[['Brand_Clean', '$ SHIPMENTS 10/23/23']], on='Brand_Clean', how='left')
                     df = df.merge(tab4[['Brand_Clean', 'Total Shipment $ Q1 2024 sets']], on='Brand_Clean', how='left')
 
-                    # Replace NaN with 0 for numeric columns specifically to avoid warnings
                     numeric_cols = df.select_dtypes(include=[np.number]).columns
                     df[numeric_cols] = df[numeric_cols].fillna(0)
 
-                    # 4. CALCULATIONS
-                    df['% Change in YTD Sales'] = (df['YTD SET SALES\n(through to 9/22/2023)'] - df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']) / df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']
+                    # 4. CALCULATIONS (WITH SAFE DIVISION)
+                    df['% Change in YTD Sales'] = np.where(
+                        df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'] != 0,
+                        (df['YTD SET SALES\n(through to 9/22/2023)'] - df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']) / df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'],
+                        np.nan
+                    )
                     df['Total Expected Sales'] = df['Q3 2022\nSET SALES'] + df['Q4 2022\nSET SALES'] + df['Q1 2023 \nSET SALES']
                     df['Total Available Inventory'] = df['Sum of OH+OO'] + df['$ SHIPMENTS 10/23/23'] + df['Total Shipment $ Q1 2024 sets']
                     df['Dollar Difference'] = df['Total Available Inventory'] - df['Total Expected Sales']
-                    df['Inventory as % of Expected Sales'] = df['Total Available Inventory'] / df['Total Expected Sales']
+                    
+                    df['Inventory as % of Expected Sales'] = np.where(
+                        df['Total Expected Sales'] != 0,
+                        df['Total Available Inventory'] / df['Total Expected Sales'],
+                        np.nan
+                    )
                     df['Comments'] = ""
 
-                    # 5. CLEAN UP
+                    # 5. SUBTOTALS AND GRAND TOTAL LOGIC
+                    axes = ['SKIN CARE', 'MAKEUP', 'FRAGRANCE']
+                    axis_rows = []
+
+                    for axe in axes:
+                        axe_df = df[df['Axe'] == axe]
+                        if axe_df.empty: continue
+                        
+                        sum_series = {
+                            'Axe': axe,
+                            'Brand': f'{axe} Total',
+                            'YTD SET SALES\n(through to 9/22/2023)': axe_df['YTD SET SALES\n(through to 9/22/2023)'].sum(),
+                            'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': axe_df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'].sum(),
+                            'Q3 2022\nSET SALES': axe_df['Q3 2022\nSET SALES'].sum(),
+                            'Q4 2022\nSET SALES': axe_df['Q4 2022\nSET SALES'].sum(),
+                            'Q1 2023 \nSET SALES': axe_df['Q1 2023 \nSET SALES'].sum(),
+                            'Sum of OH+OO': axe_df['Sum of OH+OO'].sum(),
+                            '$ SHIPMENTS 10/23/23': axe_df['$ SHIPMENTS 10/23/23'].sum(),
+                            'Total Shipment $ Q1 2024 sets': axe_df['Total Shipment $ Q1 2024 sets'].sum(),
+                        }
+                        
+                        prior_ytd = sum_series['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']
+                        sum_series['% Change in YTD Sales'] = (sum_series['YTD SET SALES\n(through to 9/22/2023)'] - prior_ytd) / prior_ytd if prior_ytd != 0 else np.nan
+                        sum_series['Total Expected Sales'] = sum_series['Q3 2022\nSET SALES'] + sum_series['Q4 2022\nSET SALES'] + sum_series['Q1 2023 \nSET SALES']
+                        sum_series['Dollar Difference'] = (sum_series['Sum of OH+OO'] + sum_series['$ SHIPMENTS 10/23/23'] + sum_series['Total Shipment $ Q1 2024 sets']) - sum_series['Total Expected Sales']
+                        
+                        expected_sales = sum_series['Total Expected Sales']
+                        sum_series['Inventory as % of Expected Sales'] = (sum_series['Sum of OH+OO'] + sum_series['$ SHIPMENTS 10/23/23'] + sum_series['Total Shipment $ Q1 2024 sets']) / expected_sales if expected_sales != 0 else np.nan
+                        sum_series['Comments'] = ''
+                        
+                        axis_rows.append(pd.Series(sum_series))
+
+                    # Calculate Grand Total
+                    grand_total = {
+                        'Axe': 'ALL',
+                        'Brand': 'GRAND TOTAL',
+                        'YTD SET SALES\n(through to 9/22/2023)': df['YTD SET SALES\n(through to 9/22/2023)'].sum(),
+                        'PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)': df['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)'].sum(),
+                        'Q3 2022\nSET SALES': df['Q3 2022\nSET SALES'].sum(),
+                        'Q4 2022\nSET SALES': df['Q4 2022\nSET SALES'].sum(),
+                        'Q1 2023 \nSET SALES': df['Q1 2023 \nSET SALES'].sum(),
+                        'Sum of OH+OO': df['Sum of OH+OO'].sum(),
+                        '$ SHIPMENTS 10/23/23': df['$ SHIPMENTS 10/23/23'].sum(),
+                        'Total Shipment $ Q1 2024 sets': df['Total Shipment $ Q1 2024 sets'].sum(),
+                    }
+                    
+                    gt_prior = grand_total['PRIOR YEAR YTD SET SALES\n(as of same time last year; through to 9/21/2022)']
+                    grand_total['% Change in YTD Sales'] = (grand_total['YTD SET SALES\n(through to 9/22/2023)'] - gt_prior) / gt_prior if gt_prior != 0 else np.nan
+                    grand_total['Total Expected Sales'] = grand_total['Q3 2022\nSET SALES'] + grand_total['Q4 2022\nSET SALES'] + grand_total['Q1 2023 \nSET SALES']
+                    grand_total['Dollar Difference'] = (grand_total['Sum of OH+OO'] + grand_total['$ SHIPMENTS 10/23/23'] + grand_total['Total Shipment $ Q1 2024 sets']) - grand_total['Total Expected Sales']
+                    
+                    gt_expected = grand_total['Total Expected Sales']
+                    grand_total['Inventory as % of Expected Sales'] = (grand_total['Sum of OH+OO'] + grand_total['$ SHIPMENTS 10/23/23'] + grand_total['Total Shipment $ Q1 2024 sets']) / gt_expected if gt_expected != 0 else np.nan
+                    grand_total['Comments'] = ''
+
+                    df_with_totals = pd.concat([df, pd.DataFrame(axis_rows), pd.DataFrame([grand_total])], ignore_index=True)
+
+                    # 6. FINAL COLUMN SELECTION
                     final_columns = [
                         'Axe', 'Brand', 
                         'YTD SET SALES\n(through to 9/22/2023)', 
@@ -109,46 +170,76 @@ if st.session_state.raw_file_bytes is not None:
                         'Comments'
                     ]
                     
-                    # Save to session state so we don't lose it
-                    st.session_state.processed_df = df[final_columns]
+                    st.session_state.processed_df = df_with_totals[final_columns]
                     st.success("Pipeline complete! Data is ready.")
                     
                 except Exception as e:
                     st.error(f"An error occurred during processing: {e}")
 
-        # If processing was successful, show the download button and preview
+        # --- EXCEL FORMATTING (XLSXWRITER) ---
         if st.session_state.processed_df is not None:
             st.dataframe(st.session_state.processed_df.head(5))
             
-            # Convert dataframe to an Excel file in memory
             output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                st.session_state.processed_df.to_excel(writer, index=False)
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                st.session_state.processed_df.to_excel(writer, sheet_name='Set Sales 2023', index=False)
+                workbook = writer.book
+                worksheet = writer.sheets['Set Sales 2023']
+                
+                # Formats
+                money_format = workbook.add_format({'num_format': '$#,##0.0', 'border': 1})
+                percent_format = workbook.add_format({'num_format': '0.0%', 'border': 1})
+                general_border = workbook.add_format({'border': 1})
+                header_format = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+                red_font = workbook.add_format({'font_color': 'red', 'num_format': '$#,##0.0', 'border': 1})
+
+                # Apply headers and borders
+                for col_num, value in enumerate(st.session_state.processed_df.columns):
+                    worksheet.write(0, col_num, value, header_format)
+                    
+                # Format specific columns
+                money_cols = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12] # Indices for sales/inventory columns
+                percent_cols = [4, 13] # Indices for % columns
+                
+                for i in range(len(st.session_state.processed_df.columns)):
+                    if i in money_cols:
+                        worksheet.set_column(i, i, 15, money_format)
+                    elif i in percent_cols:
+                        worksheet.set_column(i, i, 12, percent_format)
+                    else:
+                        worksheet.set_column(i, i, 15, general_border)
+
+                # Conditional Formatting for Negative Dollar Difference (Index 12)
+                worksheet.conditional_format(1, 12, len(st.session_state.processed_df), 12, {
+                    'type': 'cell',
+                    'criteria': '<',
+                    'value': 0,
+                    'format': red_font
+                })
+
             processed_data_bytes = output.getvalue()
             
             st.download_button(
-                label="📥 Download Deliverable.xlsx",
+                label="📥 Download Formatted Deliverable.xlsx",
                 data=processed_data_bytes,
-                file_name="Python_Deliverable.xlsx",
+                file_name="Python_Deliverable_Formatted.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
 st.divider()
 
-# --- SECTION 2: AI CHATBOT (Unlocks after processing) ---
+# --- SECTION 2: AI CHATBOT ---
 if st.session_state.processed_df is not None:
     st.header("🤖 Step 2: AI Planning Insights")
     
-    # Ask for the API key here, locally to this section
     api_key = st.text_input("🔑 Enter your Gemini API Key to unlock the Chatbot:", type="password")
     
     if not api_key:
         st.info("Please enter your API key above to start analyzing your generated report.")
     else:
-        # Initialize client
         client = genai.Client(api_key=api_key)
         
-        # Prepare the context string from the processed data
+        # Convert to CSV for token efficiency
         data_string = st.session_state.processed_df.to_csv(index=False)
         
         system_instructions = f"""
@@ -163,31 +254,25 @@ if st.session_state.processed_df is not None:
         Inventory as % of Expected Sales to find risks. Be concise, professional, and strategic.
         """
 
-        # Display chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # Accept user input
         if prompt := st.chat_input("Ask a question about the generated inventory report..."):
-            
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
-                
                 try:
                     response = client.models.generate_content(
                         model="gemini-3.1-flash-lite", 
                         contents=f"{system_instructions}\n\nUser Question: {prompt}"
                     )
-                    
                     ai_reply = response.text
                     message_placeholder.markdown(ai_reply)
                     st.session_state.messages.append({"role": "assistant", "content": ai_reply})
-                    
                 except Exception as e:
                     st.error(f"An error occurred with the AI: {e}")
 elif st.session_state.raw_file_bytes is None:
